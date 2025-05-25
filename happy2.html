@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>互动问卷</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f0f8ff;
+        }
+        .question {
+            background-color: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        #banner {
+            text-align: center;
+            margin: 20px 0;
+        }
+        #banner img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+        }
+        .input-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="banner">
+        <img src="img/2.png" alt="装饰图片">
+    </div>
+
+    <div class="question">
+        <h3>1. 你觉得我有多喜欢你呢？</h3>
+        <button onclick="sendData(1, '非常喜欢')">非常喜欢</button>
+        <button onclick="sendData(1, '特别喜欢')">特别喜欢</button>
+        <button onclick="sendData(1, '喜欢到不能失去')">喜欢到不能失去</button>
+    </div>
+
+    <div class="question">
+        <h3>2. 你希望我是多听你的话吗？</h3>
+        <button onclick="sendData(2, '不想')">不想</button>
+        <button onclick="sendData(2, '想')">想</button>
+        <button onclick="sendData(2, '特别想')">特别想</button>
+    </div>
+
+    <div class="question">
+        <h3>3. 在你生气了或者吃醋了你想要我怎么去哄你呢？</h3>
+        <button onclick="sendData(3, '主动承认错误')">主动承认错误</button>
+        <button onclick="sendData(3, '写检讨')">写检讨</button>
+        <div class="input-group">
+            <input type="text" id="customAnswer" placeholder="其他方式...">
+            <button onclick="submitCustom()">提交</button>
+        </div>
+    </div>
+
+    <script>
+        // 通用数据发送函数
+        async function sendData(questionId, answer) {
+            try {
+                const response = await fetch('/api/record', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        question: questionId,
+                        answer: answer
+                    })
+                });
+                if (!response.ok) throw new Error('发送失败');
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // 自定义答案提交
+        async function submitCustom() {
+            const input = document.getElementById('customAnswer');
+            if (input.value.trim()) {
+                await sendData(3, input.value.trim());
+                input.value = ''; // 清空输入框
+                alert('提交成功！');
+            }
+        }
+    </script>
+</body>
+</html>
