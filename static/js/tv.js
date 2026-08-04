@@ -47,7 +47,7 @@ function destroyPlayer(){
 }
 
 function proxyMedia(url){
-    return '/api/media-proxy?url='+encodeURIComponent(url);
+    return '/.netlify/functions/media-proxy?url='+encodeURIComponent(url);
 }
 
 function openPlayer(title, url, epName, eps, from, vodId, source){
