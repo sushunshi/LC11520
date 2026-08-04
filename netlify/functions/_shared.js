@@ -207,24 +207,20 @@ async function resolvePlayableUrl(url, timeout = 8000) {
     const finalUrl = r.url || url;
     const ct = (r.headers && r.headers['content-type']) || '';
 
-    // 已经是视频内容
     if (ct.includes('video') || ct.includes('mpegurl')) return finalUrl;
 
     const html = r.body;
-    // 1. var main = "xxx.m3u8" / var xml = "xxx.m3u8"
-    let m = html.match(/var\s+(?:main|xml)\s*=\s*["']([^"']*?\.m3u8[^"']*)["']/i);
-    if (m) return absUrl(m[1].trim(), finalUrl);
-    // 2. var url = 'xxx.m3u8'
-    m = html.match(/var\s+url\s*=\s*["']([^"']*?\.m3u8[^"']*)["']/i);
-    if (m) return absUrl(m[1].trim(), finalUrl);
-    // 3. 任意裸 m3u8 链接
-    m = html.match(/["']((?:https?:)?\/\/[^"'\s]*?\.m3u8[^"'\s]*)["']/i);
+    // 1. 任意完整 https m3u8 URL（最通用）
+    let m = html.match(/["'](https?:\/\/[^"'\s]*?\.m3u8[^"'\s]*?)["']/i);
     if (m) return absUrl(m[1], finalUrl);
+    // 2. 任意完整路径（绝对/相对）
+    m = html.match(/["']([\/]?[\w\-\/\.\?=&]*?\.m3u8[^"'\s]*?)["']/i);
+    if (m) return absUrl(m[1], finalUrl);
+    // 3. var 任意名 = "...m3u8..."
+    m = html.match(/var\s+\w+\s*=\s*["']([^"']*?\.m3u8[^"']*)["']/i);
+    if (m) return absUrl(m[1].trim(), finalUrl);
     // 4. video/source 标签
     m = html.match(/<(?:video|source)[^>]+src=["']([^"']+)["']/i);
-    if (m) return absUrl(m[1], finalUrl);
-    // 5. 裸 mp4 链接
-    m = html.match(/["']((?:https?:)?\/\/[^"'\s]*?\.(?:mp4|webm|flv)[^"'\s]*)["']/i);
     if (m) return absUrl(m[1], finalUrl);
   } catch (e) {}
   return null;
