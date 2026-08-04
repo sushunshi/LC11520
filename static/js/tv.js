@@ -83,37 +83,16 @@ function buildPlayer(url,title,epName){
     var container=$('player-container');
     container.innerHTML='<video id="html5-player" controls autoplay playsinline style="width:100%;height:100%;background:#000;object-fit:contain"></video>';
     var video=container.querySelector('video');
-    player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
+    player={destroy:function(){try{video.pause();video.removeAttribute('src');video.load();}catch(e){}}};
     var isHls=/\.m3u8/i.test(url);
-    if(isHls&&window.Hls&&Hls.isSupported()){
-        var hls=new Hls({enableWorker:false});
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        video._hls=hls;
-        hls.on(Hls.Events.ERROR,function(ev,data){
-            if(data&&data.fatal&&!playerProxied&&playerUrl){
-                playerProxied=true;
-                player.destroy();
-                buildPlayer(proxyMedia(playerUrl),title,epName);
-            }
-        });
-    }else if(isHls&&video.canPlayType('application/vnd.apple.mpegurl')){
-        video.src=url;
-        video.onerror=function(){onPlayError(url,title,epName);};
-    }else{
-        video.src=url;
-        video.onerror=function(){onPlayError(url,title,epName);};
-    }
-}
-
-function onPlayError(url,title,epName){
-    if(!playerProxied&&playerUrl){
-        playerProxied=true;
-        player.destroy();
-        buildPlayer(proxyMedia(playerUrl),title,epName);
-    }else{
+    if(isHls){
+        // HLS (m3u8) 在浏览器里 CORS/兼容性问题多，直接给外链让用户用 VLC/IDM
+        video.remove();
         showPlaybackError(url);
+        return;
     }
+    video.src=url;
+    video.onerror=function(){showPlaybackError(url);};
 }
 
 // 播放失败时显示错误面板（含 m3u8 链接供复制到外部播放器）
