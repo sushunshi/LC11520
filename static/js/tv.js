@@ -86,7 +86,7 @@ function buildPlayer(url,title,epName){
     player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
     var isHls=/\.m3u8/i.test(url);
     if(isHls&&window.Hls&&Hls.isSupported()){
-        var hls=new Hls({enableWorker:true,autoStartLoad:true,xhrSetup:function(xhr){}});
+        var hls=new Hls({enableWorker:false});
         hls.loadSource(url);
         hls.attachMedia(video);
         video._hls=hls;
