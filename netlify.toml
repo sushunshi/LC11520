@@ -10,6 +10,12 @@
   [headers.values]
     Content-Security-Policy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; worker-src * blob:; media-src * blob:;"
 
+# JS 文件不缓存（避免边缘缓存返回旧版本）
+[[headers]]
+  for = "/static/js/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
 # ===== OSINT API → Netlify Functions 重定向 =====
 [[redirects]]
   from = "/api/ip-lookup"
