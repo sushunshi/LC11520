@@ -82,29 +82,61 @@ function buildPlayer(url,title,epName){
     destroyPlayer();
     var container=$('player-container');
     container.innerHTML='';
-    var isHls=/\.m3u8/i.test(url);
-    if(isHls&&window.Hls&&Hls.isSupported()){
-        var video=document.createElement('video');
-        video.controls=true;video.autoplay=true;video.playsInline=true;
-        video.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
-        container.appendChild(video);
-        player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
-        var hls=new Hls({enableWorker:false});
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        video._hls=hls;
-        hls.on(Hls.Events.ERROR,function(e,data){
-            if(data&&data.fatal){showPlaybackError(url);}
-        });
+    var video=document.createElement('video');
+    video.controls=true;video.autoplay=true;video.playsInline=true;
+    video.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
+    container.appendChild(video);
+    player={destroy:function(){try{video.pause();video.removeAttribute('src');video.load();}catch(e){}}};
+    if(/\.m3u8/i.test(url)){
+        playHlsNative(video,url);
     }else{
-        var v=document.createElement('video');
-        v.controls=true;v.autoplay=true;v.playsInline=true;
-        v.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
-        v.src=url;
-        container.appendChild(v);
-        player={destroy:function(){v.pause();v.removeAttribute('src');v.load();}};
-        v.onerror=function(){showPlaybackError(url);};
+        video.src=url;
+        video.onerror=function(){showPlaybackError(url);};
     }
+}
+
+// 纯原生 MSE HLS 播放器（不依赖 hls.js, 零 eval）
+function playHlsNative(video,url){
+    if(!('MediaSource' in window)){
+        showPlaybackError(url);
+        return;
+    }
+    var ms=new MediaSource();
+    video.src=URL.createObjectURL(ms);
+    ms.addEventListener('sourceopen',async function(){
+        try{
+            var sb=ms.addSourceBuffer('video/mp2t; codecs="avc1.42E01E, mp4a.40.2"');
+            var txt=await fetch(url).then(function(r){return r.text();});
+            var segs=[];
+            var lines=txt.split('\n');
+            for(var i=0;i<lines.length;i++){
+                var l=lines[i].trim();
+                if(l.indexOf('#EXTINF:')===0){
+                    var dur=parseFloat(l.split(':')[1].split(',')[0])||0;
+                    for(var j=i+1;j<lines.length;j++){
+                        var n=lines[j].trim();
+                        if(n&&n.charAt(0)!=='#'){segs.push({url:new URL(n,url).href});break;}
+                    }
+                }
+            }
+            if(!segs.length){showPlaybackError(url);return;}
+            for(var k=0;k<segs.length;k++){
+                var buf=await fetch(segs[k].url).then(function(r){return r.arrayBuffer();});
+                await new Promise(function(resolve){
+                    var done=function(){sb.removeEventListener('error',err);resolve();};
+                    var err=function(e){sb.removeEventListener('updateend',done);showPlaybackError(url);};
+                    sb.addEventListener('updateend',done,{once:true});
+                    sb.addEventListener('error',err);
+                    sb.appendBuffer(buf);
+                });
+            }
+            if(sb.updating)await new Promise(function(r){sb.addEventListener('updateend',r,{once:true});});
+            ms.endOfStream();
+        }catch(e){
+            console.error('HLS error',e);
+            showPlaybackError(url);
+        }
+    },{once:true});
 }
 
 // 播放失败时显示错误面板（含 m3u8 链接供复制到外部播放器）
