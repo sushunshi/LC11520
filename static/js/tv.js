@@ -79,72 +79,40 @@ function openPlayer(title, url, epName, eps, from, vodId, source){
 }
 
 function buildPlayer(url,title,epName){
+    destroyPlayer();
     var container=$('player-container');
-    container.innerHTML='';
-
-    var isHls=/\.m3u8/i.test(url)||/m3u8/i.test(url);
-    var opts={
-        container:container,
-        url:url,
-        autoSize:true,
-        autoplay:true,
-        theme:'#f43f5e',
-        fullscreen:true,
-        fullscreenWeb:true,
-        mini:true,
-        pip:true,
-        screenshot:true,
-        setting:false,
-        lock:true,
-        playbackRate:true,
-        aspectRatio:true,
-        hotkey:true,
-        muted:false,
-        flip:true,
-        customType:{
-            m3u8:function(video,u){
-                if(window.Hls&&Hls.isSupported()){
-                    var hls=new Hls({enableWorker:true,autoStartLoad:true});
-                    hls.loadSource(u);
-                    hls.attachMedia(video);
-                }else if(video.canPlayType('application/vnd.apple.mpegurl')){
-                    video.src=u;
-                }else{
-                    console.error('HLS 不受支持');
-                }
-            }
-        },
-    };
-    if(isHls)opts.type='m3u8';
-
-    try{
-        player=new Artplayer(opts);
-        player.on('error',function(){
-            // CORS 受限时回退到媒体代理重试一次
-            if(!playerProxied&&playerUrl){
+    container.innerHTML='<video id="html5-player" controls autoplay playsinline style="width:100%;height:100%;background:#000;object-fit:contain"></video>';
+    var video=container.querySelector('video');
+    player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
+    var isHls=/\.m3u8/i.test(url);
+    if(isHls&&window.Hls&&Hls.isSupported()){
+        var hls=new Hls({enableWorker:true,autoStartLoad:true,xhrSetup:function(xhr){}});
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        video._hls=hls;
+        hls.on(Hls.Events.ERROR,function(ev,data){
+            if(data&&data.fatal&&!playerProxied&&playerUrl){
                 playerProxied=true;
-                destroyPlayer();
+                player.destroy();
                 buildPlayer(proxyMedia(playerUrl),title,epName);
-            }else{
-                showPlaybackError(url);
             }
         });
-        player.on('destroy',function(){player=null;});
-    }catch(e){
-        // fallback plain video
-        var v=document.createElement('video');
-        v.controls=true;v.autoplay=true;v.style.cssText='width:100%;height:100%';
-        v.src=url;
-        v.onerror=function(){
-            if(!playerProxied&&playerUrl){
-                playerProxied=true;
-                v.src=proxyMedia(playerUrl);
-                v.load();
-            }else{
-                showPlaybackError(url);
-            }
-        };
-        container.appendChild(v);
+    }else if(isHls&&video.canPlayType('application/vnd.apple.mpegurl')){
+        video.src=url;
+        video.onerror=function(){onPlayError(url,title,epName);};
+    }else{
+        video.src=url;
+        video.onerror=function(){onPlayError(url,title,epName);};
+    }
+}
+
+function onPlayError(url,title,epName){
+    if(!playerProxied&&playerUrl){
+        playerProxied=true;
+        player.destroy();
+        buildPlayer(proxyMedia(playerUrl),title,epName);
+    }else{
+        showPlaybackError(url);
     }
 }
 
