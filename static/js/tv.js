@@ -81,18 +81,30 @@ function openPlayer(title, url, epName, eps, from, vodId, source){
 function buildPlayer(url,title,epName){
     destroyPlayer();
     var container=$('player-container');
-    container.innerHTML='<video id="html5-player" controls autoplay playsinline style="width:100%;height:100%;background:#000;object-fit:contain"></video>';
-    var video=container.querySelector('video');
-    player={destroy:function(){try{video.pause();video.removeAttribute('src');video.load();}catch(e){}}};
+    container.innerHTML='';
     var isHls=/\.m3u8/i.test(url);
-    if(isHls){
-        // HLS (m3u8) 在浏览器里 CORS/兼容性问题多，直接给外链让用户用 VLC/IDM
-        video.remove();
-        showPlaybackError(url);
-        return;
+    if(isHls&&window.Hls&&Hls.isSupported()){
+        var video=document.createElement('video');
+        video.controls=true;video.autoplay=true;video.playsInline=true;
+        video.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
+        container.appendChild(video);
+        player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
+        var hls=new Hls({enableWorker:false});
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        video._hls=hls;
+        hls.on(Hls.Events.ERROR,function(e,data){
+            if(data&&data.fatal){showPlaybackError(url);}
+        });
+    }else{
+        var v=document.createElement('video');
+        v.controls=true;v.autoplay=true;v.playsInline=true;
+        v.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
+        v.src=url;
+        container.appendChild(v);
+        player={destroy:function(){v.pause();v.removeAttribute('src');v.load();}};
+        v.onerror=function(){showPlaybackError(url);};
     }
-    video.src=url;
-    video.onerror=function(){showPlaybackError(url);};
 }
 
 // 播放失败时显示错误面板（含 m3u8 链接供复制到外部播放器）

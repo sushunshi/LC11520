@@ -4,6 +4,12 @@
 [functions]
   node_bundler = "esbuild"
 
+# 允许 eval/new Function（hls.js/ArtPlayer 依赖）
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; worker-src * blob:; media-src * blob:;"
+
 # ===== OSINT API → Netlify Functions 重定向 =====
 [[redirects]]
   from = "/api/ip-lookup"
