@@ -86,8 +86,42 @@ function buildPlayer(url,title,epName){
     video.controls=true;video.autoplay=true;video.playsInline=true;
     video.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
     container.appendChild(video);
-    player={destroy:function(){try{video.pause();video.removeAttribute('src');video.load();}catch(e){}}};
-    if(/\.m3u8/i.test(url)){
+    player={destroy:function(){if(video._hls){try{video._hls.destroy();}catch(e){}}video.pause();video.removeAttribute('src');video.load();}};
+    // 如果 url 是分享页（不是真实媒体地址），走代理抓取真实 m3u8
+    if(!/\.(m3u8|mp4|mov|webm|flv|mkv)(\?|$)/i.test(url)){
+        resolveAndPlay(url,video,title,epName);
+    }else{
+        playUrl(url,video);
+    }
+}
+
+async function resolveAndPlay(shareUrl,video,title,epName){
+    try{
+        var html=await fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(shareUrl)).then(function(r){return r.text();});
+        if(!html)throw new Error('empty');
+        // 找 m3u8：取任意 .m3u8 路径
+        var m=html.match(/var\s+\w+\s*=\s*["']([^"']*?\.m3u8[^"']*)["']/i);
+        if(!m) m=html.match(/["'](https?:\/\/[^"'\s]*?\.m3u8[^"'\s]*?)["']/i);
+        if(!m) m=html.match(/["']([\/]?[^\s"']*?\.m3u8[^\s"']*?)["']/i);
+        if(m){
+            var resolved=m[1];
+            if(!/^https?:/.test(resolved)) resolved=new URL(resolved,shareUrl).href;
+            playUrl(resolved,video);
+            return;
+        }
+    }catch(e){}
+    showPlaybackError(shareUrl);
+}
+
+function playUrl(url,video){
+    var isHls=/\.m3u8/i.test(url);
+    if(isHls&&window.Hls&&Hls.isSupported()){
+        var hls=new Hls({enableWorker:false});
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        video._hls=hls;
+        hls.on(Hls.Events.ERROR,function(e,d){if(d&&d.fatal){video._hls.destroy();playHlsNative(video,url);}});
+    }else if(isHls){
         playHlsNative(video,url);
     }else{
         video.src=url;
