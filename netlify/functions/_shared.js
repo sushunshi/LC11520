@@ -201,27 +201,46 @@ const MEDIA_EXT = /\.(m3u8|mp4|mov|webm|flv|mkv|mp3|aac|m4a)(\?|$)/i;
 async function resolvePlayableUrl(url, timeout = 8000) {
   if (MEDIA_EXT.test(url)) return url;
 
-  try {
-    const r = await httpGet(url, timeout);
+  const tryResolve = async (u) => {
+    const r = await httpGet(u, timeout);
     if (r.status !== 200 || !r.body) return null;
-    const finalUrl = r.url || url;
+    const finalUrl = r.url || u;
     const ct = (r.headers && r.headers['content-type']) || '';
-
     if (ct.includes('video') || ct.includes('mpegurl')) return finalUrl;
 
     const html = r.body;
-    // 1. 任意完整 https m3u8 URL（最通用）
+    // 1. 任意完整 https m3u8 URL
     let m = html.match(/["'](https?:\/\/[^"'\s]*?\.m3u8[^"'\s]*?)["']/i);
     if (m) return absUrl(m[1], finalUrl);
-    // 2. 任意完整路径（绝对/相对）
-    m = html.match(/["']([\/]?[\w\-\/\.\?=&]*?\.m3u8[^"'\s]*?)["']/i);
+    // 2. 任意路径 .m3u8
+    m = html.match(/["']([\/]?[^\s"']*?\.m3u8[^\s"']*?)["']/i);
     if (m) return absUrl(m[1], finalUrl);
     // 3. var 任意名 = "...m3u8..."
     m = html.match(/var\s+\w+\s*=\s*["']([^"']*?\.m3u8[^"']*)["']/i);
     if (m) return absUrl(m[1].trim(), finalUrl);
-    // 4. video/source 标签
+    // 4. var 任意名 = "...xml..."（lzcdn 系列常用，再 fetch xml 找 m3u8）
+    m = html.match(/var\s+\w+\s*=\s*["']([^"']*?\.xml[^"']*)["']/i);
+    if (m) {
+      const xmlUrl = absUrl(m[1].trim(), finalUrl);
+      const xmlR = await httpGet(xmlUrl, timeout);
+      if (xmlR.body) {
+        const xm = xmlR.body.match(/["<](https?:\/\/[^"'\s<>]*?\.m3u8[^"'\s<>]*?)["<>]/i);
+        if (xm) return absUrl(xm[1], xmlR.url || xmlUrl);
+      }
+    }
+    // 5. video/source 标签
     m = html.match(/<(?:video|source)[^>]+src=["']([^"']+)["']/i);
     if (m) return absUrl(m[1], finalUrl);
+    return null;
+  };
+
+  try { return await tryResolve(url); } catch (e) {}
+  // 兜底：尝试跟随常见 30x 跳转（/share/xxx → 真实地址）
+  try {
+    const head = await httpGet(url, 5000);
+    if (head.url && head.url !== url && !head.url.includes('/share/')) {
+      return await tryResolve(head.url);
+    }
   } catch (e) {}
   return null;
 }
