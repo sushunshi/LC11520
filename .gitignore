@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+tv_config.json
+
+# Node
+node_modules/
+.netlify/
+
+# 系统
+.DS_Store
+Thumbs.db
+*.log

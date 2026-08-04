@@ -1,0 +1,16 @@
+{
+  "name": "ghosttrack-osint",
+  "version": "2.0.0",
+  "description": "GhostTrack OSINT + LunaTV - Netlify Functions backend",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --check netlify/functions/_shared.js && node --check netlify/functions/ip-lookup.js"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0",
+    "libphonenumber-js": "^1.13.10"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

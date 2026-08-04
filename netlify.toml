@@ -1,0 +1,104 @@
+[build]
+  publish = "."
+
+[functions]
+  node_bundler = "esbuild"
+
+# ===== OSINT API → Netlify Functions 重定向 =====
+[[redirects]]
+  from = "/api/ip-lookup"
+  to = "/.netlify/functions/ip-lookup"
+  status = 200
+
+[[redirects]]
+  from = "/api/phone-lookup"
+  to = "/.netlify/functions/phone-lookup"
+  status = 200
+
+[[redirects]]
+  from = "/api/username-search"
+  to = "/.netlify/functions/username-search"
+  status = 200
+
+[[redirects]]
+  from = "/api/resource/analyze"
+  to = "/.netlify/functions/resource-analyze"
+  status = 200
+
+[[redirects]]
+  from = "/api/resource/m3u8"
+  to = "/.netlify/functions/resource-m3u8"
+  status = 200
+
+[[redirects]]
+  from = "/api/resource/resolve"
+  to = "/.netlify/functions/resource-resolve"
+  status = 200
+
+[[redirects]]
+  from = "/api/resource/download"
+  to = "/.netlify/functions/resource-download"
+  status = 200
+
+[[redirects]]
+  from = "/api/media-proxy"
+  to = "/.netlify/functions/media-proxy"
+  status = 200
+
+# ===== 影视 API =====
+[[redirects]]
+  from = "/api/tv/config"
+  to = "/.netlify/functions/tv-config"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/config/subscribe"
+  to = "/.netlify/functions/tv-config-subscribe"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/home"
+  to = "/.netlify/functions/tv-home"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/search"
+  to = "/.netlify/functions/tv-search"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/detail"
+  to = "/.netlify/functions/tv-detail"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/play"
+  to = "/.netlify/functions/tv-play"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/calendar"
+  to = "/.netlify/functions/tv-calendar"
+  status = 200
+
+[[redirects]]
+  from = "/api/tv/douban"
+  to = "/.netlify/functions/tv-douban"
+  status = 200
+
+# ===== 页面 =====
+[[redirects]]
+  from = "/tv"
+  to = "/tv.html"
+  status = 200
+
+[[redirects]]
+  from = "/tv-manifest"
+  to = "/tv-manifest.json"
+  status = 200
+
+# ===== SPA 兜底 =====
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
