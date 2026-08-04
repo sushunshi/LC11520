@@ -36,6 +36,7 @@ var state={
     searchResults:null,
     detail:null,
     playing:null,
+    lastOriginalUrl:'',  // 错误面板的"复制链接"用
 };
 
 // ========== 播放器 ==========
@@ -46,7 +47,12 @@ function destroyPlayer(){
     if(player){try{player.destroy(false);}catch(e){}player=null;}
 }
 
-function proxyMedia(url){
+// 浏览器无法直接 fetch 第三方 m3u8（缺 CORS 头），
+// 任何外网 m3u8 URL 都要包成走 Netlify 代理的同源 URL
+function toProxy(url){
+    if(!url)return url;
+    if(url.indexOf('/.netlify/functions/media-proxy')===0)return url;
+    if(!/^https?:\/\//i.test(url))return url;
     return '/.netlify/functions/media-proxy?url='+encodeURIComponent(url);
 }
 
@@ -106,7 +112,8 @@ async function resolveAndPlay(shareUrl,video,title,epName){
         if(m){
             var resolved=m[1];
             if(!/^https?:/.test(resolved)) resolved=new URL(resolved,shareUrl).href;
-            playUrl(resolved,video);
+            // 走代理才能在浏览器内播放
+            playUrl(toProxy(resolved),video);
             return;
         }
     }catch(e){}
@@ -116,11 +123,11 @@ async function resolveAndPlay(shareUrl,video,title,epName){
 function playUrl(url,video){
     var isHls=/\.m3u8/i.test(url);
     if(isHls&&window.Hls&&Hls.isSupported()){
-        var hls=new Hls({enableWorker:false});
+        var hls=new Hls({enableWorker:false,xhrSetup:function(xhr){xhr.withCredentials=false;}});
         hls.loadSource(url);
         hls.attachMedia(video);
         video._hls=hls;
-        hls.on(Hls.Events.ERROR,function(e,d){if(d&&d.fatal){video._hls.destroy();playHlsNative(video,url);}});
+        hls.on(Hls.Events.ERROR,function(e,d){if(d&&d.fatal){try{video._hls.destroy();}catch(e2){}playHlsNative(video,url);}});
     }else if(isHls){
         playHlsNative(video,url);
     }else{
@@ -130,11 +137,26 @@ function playUrl(url,video){
 }
 
 // 纯原生 MSE HLS 播放器（不依赖 hls.js, 零 eval）
+// 注意：url 应为同源代理 URL（/.netlify/functions/media-proxy?url=...），
+//       分片 fetch 时会基于代理 m3u8 解析出的原始地址再次包成代理。
 function playHlsNative(video,url){
     if(!('MediaSource' in window)){
         showPlaybackError(url);
         return;
     }
+    // 从代理 URL 拆出原始 m3u8 URL（用于解析分片为绝对地址）
+    var realBase=url;
+    try{
+        var m=url.match(/[?&]url=([^&]+)/);
+        if(m)realBase=decodeURIComponent(m[1]);
+    }catch(e){}
+    var wrapSeg=function(u){
+        // 已是同源代理 / 已经是同源相对 → 不再包
+        if(!u)return u;
+        if(u.charAt(0)==='/'||u.indexOf('/.netlify/functions/media-proxy')===0)return u;
+        if(!/^https?:/i.test(u))return u;
+        return '/.netlify/functions/media-proxy?url='+encodeURIComponent(u);
+    };
     var ms=new MediaSource();
     video.src=URL.createObjectURL(ms);
     ms.addEventListener('sourceopen',async function(){
@@ -146,10 +168,15 @@ function playHlsNative(video,url){
                 var ls=txt.split('\n');
                 for(var i=0;i<ls.length;i++){
                     var ll=ls[i].trim();
-                    if(v&&ll&&ll.charAt(0)!=='#'){v=new URL(ll,url).href;break;}
+                    if(v&&ll&&ll.charAt(0)!=='#'){v=new URL(ll,realBase).href;break;}
                     if(ll.indexOf('#EXT-X-STREAM-INF')===0)v=ll;
                 }
-                if(v&&v!==ll){txt=await fetch(v).then(function(r){return r.text();});}
+                if(v){
+                    // 子 playlist 也走代理
+                    var subProxy=wrapSeg(v);
+                    txt=await fetch(subProxy).then(function(r){return r.text();});
+                    realBase=v;
+                }
             }
             var segs=[];
             var lines=txt.split('\n');
@@ -158,7 +185,11 @@ function playHlsNative(video,url){
                 if(l.indexOf('#EXTINF:')===0){
                     for(var j=i+1;j<lines.length;j++){
                         var n=lines[j].trim();
-                        if(n&&n.charAt(0)!=='#'){segs.push({url:new URL(n,url).href});break;}
+                        if(n&&n.charAt(0)!=='#'){
+                            var abs=new URL(n,realBase).href;
+                            segs.push({url:wrapSeg(abs)});
+                            break;
+                        }
                     }
                 }
             }
@@ -187,18 +218,20 @@ function playHlsNative(video,url){
     },{once:true});
 }
 
-// 播放失败时显示错误面板（含 m3u8 链接供复制到外部播放器）
+// 播放失败时显示错误面板（含原始 m3u8 链接供复制到外部播放器）
 function showPlaybackError(url){
     var container=$('player-container');
     if(!container)return;
+    // 优先用原始直连 m3u8（VLC/IDM 能用）
+    var linkUrl=state.lastOriginalUrl||url;
     container.innerHTML='<div style="padding:24px;color:#fff;text-align:center;max-width:560px;margin:0 auto;font-size:14px;line-height:1.7">'+
         '<div style="font-size:40px;margin-bottom:12px">⚠️</div>'+
         '<div style="font-weight:700;margin-bottom:8px">无法在此浏览器播放</div>'+
         '<div style="color:#9aa1ad;margin-bottom:16px">可能是 CORS 或网络限制，复制下方链接到 VLC / 迅雷 / IDM 等工具观看</div>'+
-        '<textarea id="play-err-url" style="width:100%;height:80px;padding:8px;background:#0f1115;color:#e8eaed;border:1px solid #262a32;border-radius:6px;font-size:11px;font-family:monospace;resize:none" readonly>'+esc(url)+'</textarea>'+
+        '<textarea id="play-err-url" style="width:100%;height:80px;padding:8px;background:#0f1115;color:#e8eaed;border:1px solid #262a32;border-radius:6px;font-size:11px;font-family:monospace;resize:none" readonly>'+esc(linkUrl)+'</textarea>'+
         '<div style="display:flex;gap:8px;margin-top:10px;justify-content:center">'+
             '<button id="play-err-copy" style="padding:8px 18px;background:#f43f5e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">复制链接</button>'+
-            '<a href="'+esc(url)+'" target="_blank" rel="noopener" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;text-decoration:none;font-size:13px">浏览器打开</a>'+
+            '<a href="'+esc(linkUrl)+'" target="_blank" rel="noopener" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;text-decoration:none;font-size:13px">浏览器打开</a>'+
         '</div></div>';
     var btn=document.getElementById('play-err-copy');
     if(btn) btn.onclick=function(){
@@ -547,12 +580,17 @@ async function playUrl(detail,ep,epIndex){
 
     // try resolve via server to get playable url (share page → m3u8/mp4)
     var url=ep.url;
+    var originalUrl='';
     try{
         var r=await fetch('/api/tv/play?source='+encodeURIComponent(detail.source)+'&vod_id='+encodeURIComponent(detail.vod_id)+'&ep='+epIndex);
         var d=await r.json();
         if(d.playable_url)url=d.playable_url;
         else if(d.episode&&d.episode.url)url=d.episode.url;
+        // 真实可播 URL（直连），用于错误面板"复制"
+        if(d.original_url)originalUrl=d.original_url;
+        else if(d.playable_url&&!/netlify\.functions\/media-proxy/.test(d.playable_url))originalUrl=d.playable_url;
     }catch(e){}
+    state.lastOriginalUrl=originalUrl||url;
 
     var groups=parsePlayGroups(detail.vod_play_from,detail.vod_play_url);
     openPlayer(detail.vod_name,url,ep.name,groups[0]?groups[0].eps:[],'',detail.vod_id,detail.source);

@@ -53,6 +53,13 @@ exports.handler = async (event) => {
     }
   }
 
+  // 关键：浏览器端 CORS 不能访问第三方 m3u8 域名，
+  // 所以 playable_url 始终包装成走 Netlify 代理的同源 URL。
+  // 前端 hls.js / MSE 拿到同源 URL 就能直接 fetch / XHR 分片。
+  const proxyUrl = playableUrl && /^https?:\/\//i.test(playableUrl)
+    ? '/.netlify/functions/media-proxy?url=' + encodeURIComponent(playableUrl)
+    : playableUrl;
+
   return json(200, {
     source,
     site_name: site.name || source,
@@ -61,7 +68,9 @@ exports.handler = async (event) => {
     from: group.from,
     ep_index: epIdx + 1,
     episode: target,
-    playable_url: playableUrl,
+    playable_url: proxyUrl,        // 兼容字段：直接可喂播放器（同源）
+    proxy_url: proxyUrl,           // 新字段：明确语义
+    original_url: playableUrl,     // 原始 m3u8 URL，供「复制到外部播放器」用
     episode_count: group.eps.length,
     episodes: group.eps,
     vod_id: vodId,

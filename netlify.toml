@@ -10,11 +10,25 @@
   [headers.values]
     Content-Security-Policy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline' 'unsafe-eval'; worker-src * blob:; media-src * blob:;"
 
-# JS 文件不缓存（避免边缘缓存返回旧版本）
+# JS 文件不缓存（必须 no-store：否则边缘可能返回旧版，触发诡异 SyntaxError）
 [[headers]]
   for = "/static/js/*"
   [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
+    Cache-Control = "no-store, no-cache, must-revalidate, max-age=0"
+    Pragma = "no-cache"
+    Expires = "0"
+
+# 主页 / tv.html 也不缓存
+[[headers]]
+  for = "/tv.html"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate, max-age=0"
+
+# media-proxy 走默认 + 自身在函数里设的 CORS
+[[headers]]
+  for = "/.netlify/functions/media-proxy"
+  [headers.values]
+    Cache-Control = "public, max-age=300, s-maxage=300"
 
 # ===== OSINT API → Netlify Functions 重定向 =====
 [[redirects]]
