@@ -105,14 +105,23 @@ function playHlsNative(video,url){
     video.src=URL.createObjectURL(ms);
     ms.addEventListener('sourceopen',async function(){
         try{
-            var sb=ms.addSourceBuffer('video/mp2t; codecs="avc1.42E01E, mp4a.40.2"');
             var txt=await fetch(url).then(function(r){return r.text();});
+            // master playlist: #EXT-X-STREAM-INF → 抓第一个 variant 继续
+            if(txt.indexOf('#EXT-X-STREAM-INF')>=0){
+                var v=null;
+                var ls=txt.split('\n');
+                for(var i=0;i<ls.length;i++){
+                    var ll=ls[i].trim();
+                    if(v&&ll&&ll.charAt(0)!=='#'){v=new URL(ll,url).href;break;}
+                    if(ll.indexOf('#EXT-X-STREAM-INF')===0)v=ll;
+                }
+                if(v&&v!==ll){txt=await fetch(v).then(function(r){return r.text();});}
+            }
             var segs=[];
             var lines=txt.split('\n');
             for(var i=0;i<lines.length;i++){
                 var l=lines[i].trim();
                 if(l.indexOf('#EXTINF:')===0){
-                    var dur=parseFloat(l.split(':')[1].split(',')[0])||0;
                     for(var j=i+1;j<lines.length;j++){
                         var n=lines[j].trim();
                         if(n&&n.charAt(0)!=='#'){segs.push({url:new URL(n,url).href});break;}
@@ -120,15 +129,20 @@ function playHlsNative(video,url){
                 }
             }
             if(!segs.length){showPlaybackError(url);return;}
+            var sb;
+            try{ sb=ms.addSourceBuffer('video/mp2t; codecs="avc1.42E01E,mp4a.40.2"'); }
+            catch(e){ try{ sb=ms.addSourceBuffer('video/mp2t; codecs="avc1.4D401E,mp4a.40.2"'); }catch(e2){
+                try{ sb=ms.addSourceBuffer('video/mp2t'); }catch(e3){ showPlaybackError(url);return; }
+            }}
             for(var k=0;k<segs.length;k++){
                 var buf=await fetch(segs[k].url).then(function(r){return r.arrayBuffer();});
-                await new Promise(function(resolve){
+                await new Promise(function(resolve,reject){
                     var done=function(){sb.removeEventListener('error',err);resolve();};
-                    var err=function(e){sb.removeEventListener('updateend',done);showPlaybackError(url);};
+                    var err=function(){sb.removeEventListener('updateend',done);reject(new Error('segment error'));};
                     sb.addEventListener('updateend',done,{once:true});
-                    sb.addEventListener('error',err);
+                    sb.addEventListener('error',err,{once:true});
                     sb.appendBuffer(buf);
-                });
+                }).catch(function(){showPlaybackError(url);return;});
             }
             if(sb.updating)await new Promise(function(r){sb.addEventListener('updateend',r,{once:true});});
             ms.endOfStream();
