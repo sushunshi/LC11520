@@ -94,7 +94,7 @@ function buildPlayer(url,title,epName){
         mini:true,
         pip:true,
         screenshot:true,
-        setting:true,
+        setting:false,
         lock:true,
         playbackRate:true,
         aspectRatio:true,
