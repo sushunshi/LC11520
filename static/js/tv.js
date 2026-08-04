@@ -125,6 +125,8 @@ function buildPlayer(url,title,epName){
                 playerProxied=true;
                 destroyPlayer();
                 buildPlayer(proxyMedia(playerUrl),title,epName);
+            }else{
+                showPlaybackError(url);
             }
         });
         player.on('destroy',function(){player=null;});
@@ -138,10 +140,33 @@ function buildPlayer(url,title,epName){
                 playerProxied=true;
                 v.src=proxyMedia(playerUrl);
                 v.load();
+            }else{
+                showPlaybackError(url);
             }
         };
         container.appendChild(v);
     }
+}
+
+// 播放失败时显示错误面板（含 m3u8 链接供复制到外部播放器）
+function showPlaybackError(url){
+    var container=$('player-container');
+    if(!container)return;
+    container.innerHTML='<div style="padding:24px;color:#fff;text-align:center;max-width:560px;margin:0 auto;font-size:14px;line-height:1.7">'+
+        '<div style="font-size:40px;margin-bottom:12px">⚠️</div>'+
+        '<div style="font-weight:700;margin-bottom:8px">无法在此浏览器播放</div>'+
+        '<div style="color:#9aa1ad;margin-bottom:16px">可能是 CORS 或网络限制，复制下方链接到 VLC / 迅雷 / IDM 等工具观看</div>'+
+        '<textarea id="play-err-url" style="width:100%;height:80px;padding:8px;background:#0f1115;color:#e8eaed;border:1px solid #262a32;border-radius:6px;font-size:11px;font-family:monospace;resize:none" readonly>'+esc(url)+'</textarea>'+
+        '<div style="display:flex;gap:8px;margin-top:10px;justify-content:center">'+
+            '<button id="play-err-copy" style="padding:8px 18px;background:#f43f5e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">复制链接</button>'+
+            '<a href="'+esc(url)+'" target="_blank" rel="noopener" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;text-decoration:none;font-size:13px">浏览器打开</a>'+
+        '</div></div>';
+    var btn=document.getElementById('play-err-copy');
+    if(btn) btn.onclick=function(){
+        var ta=document.getElementById('play-err-url');
+        ta.select();
+        try{navigator.clipboard.writeText(ta.value);btn.textContent='✓ 已复制';setTimeout(function(){btn.textContent='复制链接';},2000);}catch(e){document.execCommand('copy');}
+    };
 }
 
 function closePlayer(){
