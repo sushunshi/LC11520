@@ -319,6 +319,8 @@ function playUrlDirect(url,video){
 // 纯原生 MSE HLS 播放器（不依赖 hls.js, 零 eval）
 // 注意：url 应为同源代理 URL（/.netlify/functions/media-proxy?url=...），
 //       分片 fetch 时会基于代理 m3u8 解析出的原始地址再次包成代理。
+// 关键：优先用 direct URL 拉 m3u8（避免 Netlify 出口 IP 被源站 ban），
+//       失败回退到代理 URL。
 function playHlsNative(video,url){
     if(!('MediaSource' in window)){
         showPlaybackError(url);
@@ -331,13 +333,10 @@ function playHlsNative(video,url){
         if(m)realBase=decodeURIComponent(m[1]);
     }catch(e){}
     // 把分片/子 playlist URL 解析为绝对 URL
-    // 注意：media-proxy 重写后的分片 URL 是 path-absolute (/.netlify/...)，
-    //       不能用 new URL 把它们拼到 realBase 上 —— 必须直接保留
     var absUrl=function(u){
         if(!u)return u;
         if(/^https?:\/\//i.test(u))return u;  // 已经是绝对 URL
         if(u.charAt(0)==='/')return u;         // path-absolute，浏览器 fetch 时会拼到当前页面 origin
-        // 相对路径：用 realBase 拼（realBase 必须是绝对 URL）
         if(/^https?:\/\//i.test(realBase))return new URL(u,realBase).href;
         return u;
     };
@@ -347,11 +346,26 @@ function playHlsNative(video,url){
         if(!/^https?:/i.test(u))return u;
         return '/.netlify/functions/media-proxy?url='+encodeURIComponent(u);
     };
+    // 优先 direct fetch m3u8（realBase），失败回退到代理
+    var fetchM3u8Text=async function(u){
+        // 先尝试 direct URL
+        if(/^https?:\/\//i.test(u)){
+            try{
+                var r=await fetch(u,{mode:'cors'});
+                if(r.ok)return await r.text();
+            }catch(e){ /* CORS 拦截或网络错误，回退到代理 */ }
+        }
+        // 回退：代理 URL
+        var r2=await fetch(url);
+        if(!r2.ok)throw new Error('proxy returned '+r2.status);
+        return await r2.text();
+    };
     var ms=new MediaSource();
     video.src=URL.createObjectURL(ms);
     ms.addEventListener('sourceopen',async function(){
         try{
-            var txt=await fetch(url).then(function(r){return r.text();});
+            // 优先用 realBase（direct）拉 m3u8
+            var txt=await fetchM3u8Text(realBase);
             // master playlist: 找 #EXT-X-STREAM-INF 后第一个非注释行作为 variant URL
             if(txt.indexOf('#EXT-X-STREAM-INF')>=0){
                 var ls=txt.split('\n');
@@ -364,18 +378,16 @@ function playHlsNative(video,url){
                     if(inStream&&ll.charAt(0)!=='#'){subRaw=ll;break;}
                 }
                 if(subRaw){
-                    // subRaw 可能是 path-absolute 代理 URL 或相对路径或绝对 URL
-                    var subProxy=wrapSeg(absUrl(subRaw));
-                    txt=await fetch(subProxy).then(function(r){return r.text();});
-                    // realBase 重新设为子 playlist 的"原始" URL（用于解析子 playlist 里的分片）
+                    var subAbs=absUrl(subRaw);
+                    txt=await fetchM3u8Text(subAbs);
                     try{
-                        var sm=subProxy.match(/[?&]url=([^&]+)/);
+                        var sm=subAbs.match(/[?&]url=([^&]+)/);
                         if(sm)realBase=decodeURIComponent(sm[1]);
-                        else realBase=absUrl(subRaw);
-                    }catch(e){realBase=absUrl(subRaw);}
+                        else realBase=subAbs;
+                    }catch(e){realBase=subAbs;}
                 }
             }
-            // realBase 必须是绝对 URL（否则后面 new URL 会用错误 base 拼出错误分片）
+            // realBase 必须是绝对 URL
             if(!/^https?:\/\//i.test(realBase)){
                 console.error('playHlsNative: realBase 不是绝对 URL, 拒绝',realBase);
                 showPlaybackError(url);
@@ -402,13 +414,29 @@ function playHlsNative(video,url){
                 try{ sb=ms.addSourceBuffer('video/mp2t'); }catch(e3){ showPlaybackError(url);return; }
             }}
             for(var k=0;k<segs.length;k++){
-                var buf=await fetch(segs[k].url).then(function(r){return r.arrayBuffer();});
+                // 分片也优先 direct 拉取，失败回退代理（已经在 wrapSeg 里包成代理）
+                var segUrl=segs[k].url;
+                var segBuf=null;
+                if(/^https?:\/\//i.test(segUrl)){
+                    try{
+                        var sr=await fetch(segUrl,{mode:'cors'});
+                        if(sr.ok)segBuf=await sr.arrayBuffer();
+                    }catch(e){ /* 回退 */ }
+                }
+                if(!segBuf){
+                    // 已经是代理 URL 或直接路径，绝对 URL 时包成代理
+                    var fallback=segUrl;
+                    if(/^https?:\/\//i.test(segUrl))fallback='/.netlify/functions/media-proxy?url='+encodeURIComponent(segUrl);
+                    var sr2=await fetch(fallback);
+                    if(!sr2.ok){showPlaybackError(url);return;}
+                    segBuf=await sr2.arrayBuffer();
+                }
                 await new Promise(function(resolve,reject){
                     var done=function(){sb.removeEventListener('error',err);resolve();};
                     var err=function(){sb.removeEventListener('updateend',done);reject(new Error('segment error'));};
                     sb.addEventListener('updateend',done,{once:true});
                     sb.addEventListener('error',err,{once:true});
-                    sb.appendBuffer(buf);
+                    sb.appendBuffer(segBuf);
                 }).catch(function(){showPlaybackError(url);return;});
             }
             if(sb.updating)await new Promise(function(r){sb.addEventListener('updateend',r,{once:true});});
