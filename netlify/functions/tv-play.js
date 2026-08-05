@@ -158,12 +158,47 @@ exports.handler = async (event) => {
   if (/^https?:\/\//i.test(playableUrl)) {
     const ck = `m3u8broken_${playableUrl}`;
     let broken = cacheGet(ck);
+    let reason = '';
     if (broken === undefined) {
-      broken = await isM3u8DefinitelyBroken(playableUrl);
+      // 直接检测，不做超时容错（Netlify 那边挂掉的话能定位）
+      let r;
+      try {
+        r = await httpGet(playableUrl, 5000, { Range: 'bytes=0-511' });
+      } catch (e) {
+        reason = 'fetch-exception:' + (e && e.message || 'unknown');
+        broken = false; // 网络错误 → 兜底
+      }
+      if (r) {
+        if (r.status >= 400) {
+          reason = 'status:' + r.status;
+          broken = true;
+        } else if (r.status === 0) {
+          reason = 'timeout';
+          broken = false;
+        } else {
+          const ct = (r.headers && r.headers['content-type']) || '';
+          if (/text\/html/i.test(ct)) {
+            reason = 'html-ct:' + ct;
+            broken = true;
+          } else {
+            const body = (r.body || '').trim();
+            if (body.length > 0 && body.slice(0, 16).indexOf('#EXTM3U') !== 0) {
+              reason = 'not-m3u8:[' + body.slice(0, 60) + ']';
+              broken = true;
+            } else {
+              reason = 'ok-ct:' + ct + '-len:' + body.length;
+              broken = false;
+            }
+          }
+        }
+      }
       cacheSet(ck, broken ? '1' : '0', 600);
     }
     if (broken) {
-      return json(502, buildUnavailable(source, site, detail, groups, group, playableUrl));
+      // 在 error 信息里附上原因（调试用）
+      const resp = buildUnavailable(source, site, detail, groups, group, playableUrl);
+      resp.error = resp.error + ' (reason: ' + reason + ')';
+      return json(502, resp);
     }
   }
 
