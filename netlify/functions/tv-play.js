@@ -18,15 +18,22 @@ const MEDIA_EXT = /\.(m3u8|mp4|mov|webm|flv|mkv)(\?|$)/i;
 // 验证 m3u8 URL 真的返回 m3u8 文本
 async function verifyM3u8(url) {
   if (!/^https?:\/\//i.test(url)) return false;
-  // 用 Range 只读前 2KB，省流量
-  const r = await httpGet(url, 6000, { Range: 'bytes=0-2047' });
-  if (r.status !== 200 && r.status !== 206) return false;
+  // 普通 GET 拉 m3u8 文本（m3u8 都很小，几 KB 之内）
+  const r = await httpGet(url, 8000, { Accept: 'application/vnd.apple.mpegurl,*/*' });
+  if (r.status !== 200 && r.status !== 206) {
+    console.log('[verifyM3u8] non-2xx', url, 'status:', r.status, 'ct:', r.headers && r.headers['content-type']);
+    return false;
+  }
   const ct = (r.headers && r.headers['content-type']) || '';
-  // 显式是 HTML 的肯定不是 m3u8
-  if (/text\/html/i.test(ct)) return false;
+  if (/text\/html/i.test(ct)) {
+    console.log('[verifyM3u8] html content-type', url, 'body head:', (r.body || '').slice(0, 100));
+    return false;
+  }
   const body = r.body || '';
-  // m3u8 一定以 #EXTM3U 开头
-  if (body.trim().slice(0, 16).indexOf('#EXTM3U') !== 0) return false;
+  if (body.trim().slice(0, 16).indexOf('#EXTM3U') !== 0) {
+    console.log('[verifyM3u8] not m3u8 text', url, 'body head:', body.slice(0, 100));
+    return false;
+  }
   return true;
 }
 
