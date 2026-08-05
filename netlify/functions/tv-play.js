@@ -154,35 +154,38 @@ exports.handler = async (event) => {
     return json(502, buildUnavailable(source, site, detail, groups, group, target.url));
   }
 
-  // 明确无效的 m3u8（HTML 404 / 4xx / 非 m3u8 文本）→ 返回 502 + groups
+  // 明确无效的 m3u8（HTML 404 / 非 m3u8 文本）→ 返回 502 + groups
+  // 注：4xx/timeout 不直接 502（可能是源站根据 IP 段限速），让前端 media-proxy 兜底
   if (/^https?:\/\//i.test(playableUrl)) {
     const ck = `m3u8broken_${playableUrl}`;
     let broken = cacheGet(ck);
     let reason = '';
     if (broken === undefined) {
-      // 直接检测，不做超时容错（Netlify 那边挂掉的话能定位）
       let r;
       try {
-        r = await httpGet(playableUrl, 5000, { Range: 'bytes=0-511' });
+        r = await httpGet(playableUrl, 4000, { Range: 'bytes=0-511' });
       } catch (e) {
         reason = 'fetch-exception:' + (e && e.message || 'unknown');
         broken = false; // 网络错误 → 兜底
       }
       if (r) {
         if (r.status >= 400) {
-          reason = 'status:' + r.status;
-          broken = true;
+          // 4xx/5xx 不直接判死（Netlify 出口 IP 可能被源站 ban）→ 兜底
+          reason = 'http-' + r.status;
+          broken = false;
         } else if (r.status === 0) {
           reason = 'timeout';
           broken = false;
         } else {
           const ct = (r.headers && r.headers['content-type']) || '';
           if (/text\/html/i.test(ct)) {
+            // 明确是 HTML 404（status 200 但 body 是 HTML）→ 真的失效
             reason = 'html-ct:' + ct;
             broken = true;
           } else {
             const body = (r.body || '').trim();
             if (body.length > 0 && body.slice(0, 16).indexOf('#EXTM3U') !== 0) {
+              // 既不是 HTML，又不是 m3u8 → 真的失效
               reason = 'not-m3u8:[' + body.slice(0, 60) + ']';
               broken = true;
             } else {
@@ -195,7 +198,6 @@ exports.handler = async (event) => {
       cacheSet(ck, broken ? '1' : '0', 600);
     }
     if (broken) {
-      // 在 error 信息里附上原因（调试用）
       const resp = buildUnavailable(source, site, detail, groups, group, playableUrl);
       resp.error = resp.error + ' (reason: ' + reason + ')';
       return json(502, resp);
