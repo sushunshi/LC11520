@@ -7,88 +7,47 @@
  * 2. 否则选第一个 group，再 resolvePlayableUrl 解析分享页
  * 3. 解析失败 → 返回 502 + 所有 groups，让前端能切换线路
  *
- * 关键：返回 playable_url 前会主动验证 m3u8 真的返回 m3u8 文本
- * （很多资源站的失效资源返回的是 404 HTML 页面），验证失败时自动
- * 跳到下一个 group 重试，所有 group 都不可用时返回 502 + groups。
+ * m3u8 有效性：
+ * - 主动 GET 验证（Range: bytes=0-2047 省流量）
+ * - 验证失败/超时 → "未知"状态，仍然返回 playableUrl（让前端兜底）
+ * - 验证明确无效（HTML 404 页）→ 返回 502 + groups
+ * - 前端 media-proxy 也会拦截 4xx/HTML 错误并返回 502
+ * - 播放失败时前端显示"换一条线路"按钮
  */
 const { json, loadConfig, cacheGet, cacheSet, cmsApi, parsePlayGroups, resolvePlayableUrl, httpGet } = require('./_shared');
 
 const MEDIA_EXT = /\.(m3u8|mp4|mov|webm|flv|mkv)(\?|$)/i;
 
-// 验证 m3u8 URL 真的返回 m3u8 文本
-async function verifyM3u8(url) {
-  if (!/^https?:\/\//i.test(url)) return false;
-  // 普通 GET 拉 m3u8 文本（m3u8 都很小，几 KB 之内）
-  const r = await httpGet(url, 8000, { Accept: 'application/vnd.apple.mpegurl,*/*' });
-  if (r.status !== 200 && r.status !== 206) {
-    console.log('[verifyM3u8] non-2xx', url, 'status:', r.status, 'ct:', r.headers && r.headers['content-type']);
-    return false;
+// 轻量验证：明确无效（HTML 404）才返回 false，超时/网络错误返回 true（兜底）
+async function isM3u8DefinitelyBroken(url) {
+  if (!/^https?:\/\//i.test(url)) return true;
+  // 用 Range 0-512 省流量
+  let r;
+  try {
+    r = await httpGet(url, 5000, { Range: 'bytes=0-511' });
+  } catch (e) {
+    return false; // 网络错误 → 不判定为失效，让前端兜底
   }
+  if (r.status >= 400) {
+    // 4xx/5xx 明确失效
+    return true;
+  }
+  if (r.status === 0) return false; // timeout
   const ct = (r.headers && r.headers['content-type']) || '';
-  if (/text\/html/i.test(ct)) {
-    console.log('[verifyM3u8] html content-type', url, 'body head:', (r.body || '').slice(0, 100));
-    return false;
+  if (/text\/html/i.test(ct)) return true; // 明确是 HTML 404
+  const body = (r.body || '').trim();
+  // 头部以 #EXTM3U 开头是有效 m3u8；如果不是但 content-type 是 mpegurl，
+  // 可能是 master playlist 的子 playlist 也有 EXTM3U 但格式略不同
+  if (body.length > 0 && body.slice(0, 16).indexOf('#EXTM3U') !== 0) {
+    // 既不是 HTML，又不是 m3u8：可能是其他内容
+    return true;
   }
-  const body = r.body || '';
-  if (body.trim().slice(0, 16).indexOf('#EXTM3U') !== 0) {
-    console.log('[verifyM3u8] not m3u8 text', url, 'body head:', body.slice(0, 100));
-    return false;
-  }
-  return true;
-}
-
-// 验证结果缓存（10 分钟）
-function getVerifyCache(url) {
-  return cacheGet(`m3u8v_${url}`);
-}
-function setVerifyCache(url, ok) {
-  cacheSet(`m3u8v_${url}`, ok ? '1' : '0', 600);
-}
-
-async function isM3u8Valid(url) {
-  const c = getVerifyCache(url);
-  if (c === '1') return true;
-  if (c === '0') return false;
-  const ok = await verifyM3u8(url);
-  setVerifyCache(url, ok);
-  return ok;
-}
-
-// 挑选一个能验证通过的 group/ep（按 group 顺序遍历）
-async function pickPlayableGroup(groups, source, vodId) {
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i];
-    for (let j = 0; j < g.eps.length; j++) {
-      const ep = g.eps[j];
-      let candidate = ep.url;
-      // 分享页 → 先解析
-      if (candidate && !MEDIA_EXT.test(candidate)) {
-        const ck = `playable_${source}_${vodId}_${i}_${j}`;
-        const cached = cacheGet(ck);
-        if (cached) {
-          candidate = cached;
-        } else {
-          const resolved = await resolvePlayableUrl(candidate, 5000);
-          if (resolved) {
-            candidate = resolved;
-            cacheSet(ck, resolved, 3600);
-          }
-        }
-      }
-      if (!candidate || !MEDIA_EXT.test(candidate)) continue;
-      if (!/^https?:\/\//i.test(candidate)) continue;
-      // 验证 m3u8
-      if (await isM3u8Valid(candidate)) {
-        return { groupIdx: i, epIdx: j, ep, from: g.from, playableUrl: candidate };
-      }
-    }
-  }
-  return null;
+  return false; // 验证通过或不确定
 }
 
 function buildUnavailable(source, site, detail, groups, group, failedUrl) {
   return {
-    error: '该资源所有线路暂不可用，请尝试其他资源或稍后再试',
+    error: '该资源暂不可用，请尝试其他资源或稍后再试',
     error_code: 'PLAY_SOURCE_UNAVAILABLE',
     source,
     site_name: site.name || source,
@@ -118,7 +77,6 @@ function buildPlayResponse({ site, source, detail, groups, group, groupIdx, epId
     ep_index: picked.epIdx + 1,
     requested_ep: epIdx + 1,
     requested_from: group.from,
-    auto_switched: (picked.groupIdx !== groupIdx || picked.epIdx !== epIdx) ? true : false,
     episode: picked.ep,
     playable_url: proxyUrl,
     proxy_url: proxyUrl,
@@ -191,29 +149,22 @@ exports.handler = async (event) => {
     }
   }
 
-  // 验证 m3u8 真的有效；如果当前 group/ep 失效，自动跳到下一个能用的
-  if (playableUrl && MEDIA_EXT.test(playableUrl) && /^https?:\/\//i.test(playableUrl)) {
-    if (!(await isM3u8Valid(playableUrl))) {
-      const better = await pickPlayableGroup(groups, source, vodId);
-      if (better) {
-        return buildPlayResponse({
-          site, source, detail, groups, group, groupIdx, epIdx,
-          picked: better,
-          vodId,
-        });
-      }
-      return json(502, buildUnavailable(source, site, detail, groups, group, target.url));
-    }
-  } else if (!playableUrl || !MEDIA_EXT.test(playableUrl)) {
-    const better = await pickPlayableGroup(groups, source, vodId);
-    if (better) {
-      return buildPlayResponse({
-        site, source, detail, groups, group, groupIdx, epIdx,
-        picked: better,
-        vodId,
-      });
-    }
+  // 解析失败 → 返回 502 + groups（让前端引导用户切换线路）
+  if (!playableUrl || !MEDIA_EXT.test(playableUrl)) {
     return json(502, buildUnavailable(source, site, detail, groups, group, target.url));
+  }
+
+  // 明确无效的 m3u8（HTML 404 / 4xx / 非 m3u8 文本）→ 返回 502 + groups
+  if (/^https?:\/\//i.test(playableUrl)) {
+    const ck = `m3u8broken_${playableUrl}`;
+    let broken = cacheGet(ck);
+    if (broken === undefined) {
+      broken = await isM3u8DefinitelyBroken(playableUrl);
+      cacheSet(ck, broken ? '1' : '0', 600);
+    }
+    if (broken) {
+      return json(502, buildUnavailable(source, site, detail, groups, group, playableUrl));
+    }
   }
 
   return buildPlayResponse({
