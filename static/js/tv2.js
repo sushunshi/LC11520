@@ -152,8 +152,18 @@ function playHlsNative(video,url){
         var m=url.match(/[?&]url=([^&]+)/);
         if(m)realBase=decodeURIComponent(m[1]);
     }catch(e){}
+    // 把分片/子 playlist URL 解析为绝对 URL
+    // 注意：media-proxy 重写后的分片 URL 是 path-absolute (/.netlify/...)，
+    //       不能用 new URL 把它们拼到 realBase 上 —— 必须直接保留
+    var absUrl=function(u){
+        if(!u)return u;
+        if(/^https?:\/\//i.test(u))return u;  // 已经是绝对 URL
+        if(u.charAt(0)==='/')return u;         // path-absolute，浏览器 fetch 时会拼到当前页面 origin
+        // 相对路径：用 realBase 拼（realBase 必须是绝对 URL）
+        if(/^https?:\/\//i.test(realBase))return new URL(u,realBase).href;
+        return u;
+    };
     var wrapSeg=function(u){
-        // 已是同源代理 / 已经是同源相对 → 不再包
         if(!u)return u;
         if(u.charAt(0)==='/'||u.indexOf('/.netlify/functions/media-proxy')===0)return u;
         if(!/^https?:/i.test(u))return u;
@@ -164,21 +174,34 @@ function playHlsNative(video,url){
     ms.addEventListener('sourceopen',async function(){
         try{
             var txt=await fetch(url).then(function(r){return r.text();});
-            // master playlist: #EXT-X-STREAM-INF → 抓第一个 variant 继续
+            // master playlist: 找 #EXT-X-STREAM-INF 后第一个非注释行作为 variant URL
             if(txt.indexOf('#EXT-X-STREAM-INF')>=0){
-                var v=null;
                 var ls=txt.split('\n');
+                var inStream=false;
+                var subRaw=null;
                 for(var i=0;i<ls.length;i++){
                     var ll=ls[i].trim();
-                    if(v&&ll&&ll.charAt(0)!=='#'){v=new URL(ll,realBase).href;break;}
-                    if(ll.indexOf('#EXT-X-STREAM-INF')===0)v=ll;
+                    if(!ll)continue;
+                    if(ll.indexOf('#EXT-X-STREAM-INF')===0){inStream=true;continue;}
+                    if(inStream&&ll.charAt(0)!=='#'){subRaw=ll;break;}
                 }
-                if(v){
-                    // 子 playlist 也走代理
-                    var subProxy=wrapSeg(v);
+                if(subRaw){
+                    // subRaw 可能是 path-absolute 代理 URL 或相对路径或绝对 URL
+                    var subProxy=wrapSeg(absUrl(subRaw));
                     txt=await fetch(subProxy).then(function(r){return r.text();});
-                    realBase=v;
+                    // realBase 重新设为子 playlist 的"原始" URL（用于解析子 playlist 里的分片）
+                    try{
+                        var sm=subProxy.match(/[?&]url=([^&]+)/);
+                        if(sm)realBase=decodeURIComponent(sm[1]);
+                        else realBase=absUrl(subRaw);
+                    }catch(e){realBase=absUrl(subRaw);}
                 }
+            }
+            // realBase 必须是绝对 URL（否则后面 new URL 会用错误 base 拼出错误分片）
+            if(!/^https?:\/\//i.test(realBase)){
+                console.error('playHlsNative: realBase 不是绝对 URL, 拒绝',realBase);
+                showPlaybackError(url);
+                return;
             }
             var segs=[];
             var lines=txt.split('\n');
@@ -188,8 +211,7 @@ function playHlsNative(video,url){
                     for(var j=i+1;j<lines.length;j++){
                         var n=lines[j].trim();
                         if(n&&n.charAt(0)!=='#'){
-                            var abs=new URL(n,realBase).href;
-                            segs.push({url:wrapSeg(abs)});
+                            segs.push({url:wrapSeg(absUrl(n))});
                             break;
                         }
                     }
