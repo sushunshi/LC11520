@@ -99,7 +99,7 @@ function buildPlayer(url,title,epName){
     if(!/\.(m3u8|mp4|mov|webm|flv|mkv)(\?|$)/i.test(url)){
         resolveAndPlay(url,video,title,epName);
     }else{
-        playUrl(url,video);
+        playUrlDirect(url,video);
     }
 }
 
@@ -115,14 +115,17 @@ async function resolveAndPlay(shareUrl,video,title,epName){
             var resolved=m[1];
             if(!/^https?:/.test(resolved)) resolved=new URL(resolved,shareUrl).href;
             // 走代理才能在浏览器内播放
-            playUrl(toProxy(resolved),video);
+            playUrlDirect(toProxy(resolved),video);
             return;
         }
     }catch(e){}
     showPlaybackError(shareUrl);
 }
 
-function playUrl(url,video){
+// 直接播放 m3u8/mp4 URL（传入 url + video 元素）
+// 注：之前叫 playUrl，跟下面 3 参数版本的 playUrl(detail, ep, epIndex) 同名
+//     导致 JS 函数声明覆盖，buildPlayer 里调用 3 参数版本时 detail=string，访问 .source 是 undefined
+function playUrlDirect(url,video){
     var isHls=/\.m3u8/i.test(url);
     if(isHls&&window.Hls&&Hls.isSupported()){
         var hls=new Hls({enableWorker:false,xhrSetup:function(xhr){xhr.withCredentials=false;}});
