@@ -88,6 +88,8 @@ function buildPlayer(url,title,epName){
     destroyPlayer();
     var container=$('player-container');
     container.innerHTML='';
+    // url 为空：留给外层（错误面板/线路切换面板）展示
+    if(!url)return;
     var video=document.createElement('video');
     video.controls=true;video.autoplay=true;video.playsInline=true;
     video.style.cssText='width:100%;height:100%;background:#000;object-fit:contain';
@@ -218,27 +220,35 @@ function playHlsNative(video,url){
     },{once:true});
 }
 
-// 播放失败时显示错误面板（含原始 m3u8 链接供复制到外部播放器）
+// 播放失败时显示错误面板（区分"直连 URL 可复制到 VLC" vs "资源失效请换线路"）
 function showPlaybackError(url){
     var container=$('player-container');
     if(!container)return;
-    // 优先用原始直连 m3u8（VLC/IDM 能用）
     var linkUrl=state.lastOriginalUrl||url;
+    var isSharePage=linkUrl && !/\.(m3u8|mp4|mov|webm|flv|mkv)(\?|$)/i.test(linkUrl);
+    var hint=isSharePage
+        ?'该资源源站不可用，复制到外部播放器也无法观看。请返回选片页切换其他剧集。'
+        :'可能是 CORS 或网络限制，复制下方链接到 VLC / 迅雷 / IDM 等工具观看';
+    var btnPrimary=isSharePage
+        ?'<button id="play-err-back" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;cursor:pointer;font-size:13px">返回选片</button>'
+        :'<button id="play-err-copy" style="padding:8px 18px;background:#f43f5e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">复制链接</button>';
     container.innerHTML='<div style="padding:24px;color:#fff;text-align:center;max-width:560px;margin:0 auto;font-size:14px;line-height:1.7">'+
         '<div style="font-size:40px;margin-bottom:12px">⚠️</div>'+
         '<div style="font-weight:700;margin-bottom:8px">无法在此浏览器播放</div>'+
-        '<div style="color:#9aa1ad;margin-bottom:16px">可能是 CORS 或网络限制，复制下方链接到 VLC / 迅雷 / IDM 等工具观看</div>'+
+        '<div style="color:#9aa1ad;margin-bottom:16px">'+hint+'</div>'+
         '<textarea id="play-err-url" style="width:100%;height:80px;padding:8px;background:#0f1115;color:#e8eaed;border:1px solid #262a32;border-radius:6px;font-size:11px;font-family:monospace;resize:none" readonly>'+esc(linkUrl)+'</textarea>'+
         '<div style="display:flex;gap:8px;margin-top:10px;justify-content:center">'+
-            '<button id="play-err-copy" style="padding:8px 18px;background:#f43f5e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">复制链接</button>'+
+            btnPrimary+
             '<a href="'+esc(linkUrl)+'" target="_blank" rel="noopener" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;text-decoration:none;font-size:13px">浏览器打开</a>'+
         '</div></div>';
-    var btn=document.getElementById('play-err-copy');
-    if(btn) btn.onclick=function(){
+    var copy=document.getElementById('play-err-copy');
+    if(copy)copy.onclick=function(){
         var ta=document.getElementById('play-err-url');
         ta.select();
-        try{navigator.clipboard.writeText(ta.value);btn.textContent='✓ 已复制';setTimeout(function(){btn.textContent='复制链接';},2000);}catch(e){document.execCommand('copy');}
+        try{navigator.clipboard.writeText(ta.value);copy.textContent='✓ 已复制';setTimeout(function(){copy.textContent='复制链接';},2000);}catch(e){document.execCommand('copy');}
     };
+    var back=document.getElementById('play-err-back');
+    if(back)back.onclick=function(){closePlayer();};
 }
 
 function closePlayer(){
@@ -581,19 +591,75 @@ async function playUrl(detail,ep,epIndex){
     // try resolve via server to get playable url (share page → m3u8/mp4)
     var url=ep.url;
     var originalUrl='';
+    var groups=parsePlayGroups(detail.vod_play_from,detail.vod_play_url);
+    var activeFrom=(groups[0]&&groups[0].from)||'';
     try{
         var r=await fetch('/api/tv/play?source='+encodeURIComponent(detail.source)+'&vod_id='+encodeURIComponent(detail.vod_id)+'&ep='+epIndex);
         var d=await r.json();
+        if(d.error_code==='PLAY_SOURCE_UNAVAILABLE'||(r.status===502&&d.groups)){
+            // 后端解析失败：弹切换线路面板
+            state.lastOriginalUrl=d.failed_url||url;
+            openPlayer(detail.vod_name,'',ep.name,groups[0]?groups[0].eps:[],'',detail.vod_id,detail.source);
+            showSourceSwitch(d,detail,epIndex);
+            return;
+        }
         if(d.playable_url)url=d.playable_url;
         else if(d.episode&&d.episode.url)url=d.episode.url;
         // 真实可播 URL（直连），用于错误面板"复制"
         if(d.original_url)originalUrl=d.original_url;
         else if(d.playable_url&&!/netlify\.functions\/media-proxy/.test(d.playable_url))originalUrl=d.playable_url;
-    }catch(e){}
+        if(d.from)activeFrom=d.from;
+    }catch(e){console.error('tv-play fetch failed',e);}
     state.lastOriginalUrl=originalUrl||url;
 
+    openPlayer(detail.vod_name,url,ep.name,groups[0]?groups[0].eps:[],activeFrom,detail.vod_id,detail.source);
+}
+
+// 线路失效时显示：提示用户切换到其他 group
+function showSourceSwitch(d,detail,epIndex){
+    var container=$('player-container');
+    if(!container)return;
+    var groups=d.groups||[];
+    var html='<div style="padding:32px 24px;color:#fff;text-align:center;max-width:560px;margin:0 auto;font-size:14px;line-height:1.7">'+
+        '<div style="font-size:40px;margin-bottom:12px">⚠️</div>'+
+        '<div style="font-weight:700;margin-bottom:8px">当前线路【'+esc(d.from||'?')+'】暂不可用</div>'+
+        '<div style="color:#9aa1ad;margin-bottom:20px">'+esc(d.error||'该资源源站解析失败')+'</div>'+
+        '<div style="font-weight:600;margin-bottom:10px">请选择其他播放线路：</div>'+
+        '<div id="src-switch-list" style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center"></div>'+
+        '</div>';
+    container.innerHTML=html;
+    var list=document.getElementById('src-switch-list');
+    if(!list)return;
+    groups.forEach(function(g){
+        var b=document.createElement('button');
+        var directMark=g.has_direct?' ⚡直连':'';
+        b.textContent=g.from+' ('+g.count+' 集)'+directMark;
+        b.style.cssText='padding:10px 16px;background:'+(g.has_direct?'#10b981':'#1e2128')+';color:#fff;border:1px solid #262a32;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600';
+        b.onclick=function(){
+            // 重新调用 /api/tv/play?from=xxx
+            playUrlWithFrom(detail,g.from,epIndex);
+        };
+        list.appendChild(b);
+    });
+}
+
+async function playUrlWithFrom(detail,from,epIndex){
+    // 调用 tv-play 指定 from
+    var url='';
+    var originalUrl='';
+    try{
+        var r=await fetch('/api/tv/play?source='+encodeURIComponent(detail.source)+'&vod_id='+encodeURIComponent(detail.vod_id)+'&ep='+epIndex+'&from='+encodeURIComponent(from));
+        var d=await r.json();
+        if(d.error_code==='PLAY_SOURCE_UNAVAILABLE'||(r.status===502&&d.groups)){
+            showSourceSwitch(d,detail,epIndex);
+            return;
+        }
+        if(d.playable_url)url=d.playable_url;
+        if(d.original_url)originalUrl=d.original_url;
+    }catch(e){console.error(e);}
+    state.lastOriginalUrl=originalUrl||url;
     var groups=parsePlayGroups(detail.vod_play_from,detail.vod_play_url);
-    openPlayer(detail.vod_name,url,ep.name,groups[0]?groups[0].eps:[],'',detail.vod_id,detail.source);
+    openPlayer(detail.vod_name,url,'第'+epIndex+'集',groups[0]?groups[0].eps:[],from,detail.vod_id,detail.source);
 }
 
 // ========== 番剧日历 ==========
