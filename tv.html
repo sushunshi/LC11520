@@ -207,6 +207,11 @@ var state={
     detail:null,
     playing:null,
     lastOriginalUrl:'',  // 错误面板的"复制链接"用
+    // 播放上下文（供播放失败时自动切线 / 提示换线）
+    lastPlayResp:null,    // 最近一次 /api/tv/play 的完整响应（含 groups）
+    playingDetail:null,   // 当前正在播放的影片详情
+    playingEpIndex:1,     // 当前正在播放的集数
+    playingEpName:'',     // 当前集名
 };
 
 // ========== 播放器 ==========
@@ -416,6 +421,7 @@ function playHlsNative(video,url){
 }
 
 // 播放失败时显示错误面板（区分"直连 URL 可复制到 VLC" vs "资源失效请换线路"）
+// 如果有其他可选线路（state.lastPlayResp.groups），额外提供"切换线路"按钮一键切线
 function showPlaybackError(url){
     var container=$('player-container');
     if(!container)return;
@@ -424,6 +430,18 @@ function showPlaybackError(url){
     var hint=isSharePage
         ?'该资源源站不可用，复制到外部播放器也无法观看。请返回选片页切换其他剧集。'
         :'可能是 CORS 或网络限制，复制下方链接到 VLC / 迅雷 / IDM 等工具观看';
+
+    // 计算"换一条线路"按钮：仅当存在其他可用线路时显示
+    var switchBtn='';
+    var lp=state.lastPlayResp;
+    var currentFrom=(lp&&lp.from)||'';
+    if(lp&&Array.isArray(lp.groups)&&lp.groups.length>1&&state.playingDetail){
+        var other=lp.groups.filter(function(g){return g.from!==currentFrom;});
+        if(other.length){
+            switchBtn='<button id="play-err-switch" style="padding:8px 18px;background:#10b981;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600">换一条线路（'+other.length+'）</button>';
+        }
+    }
+
     var btnPrimary=isSharePage
         ?'<button id="play-err-back" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;cursor:pointer;font-size:13px">返回选片</button>'
         :'<button id="play-err-copy" style="padding:8px 18px;background:#f43f5e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">复制链接</button>';
@@ -432,8 +450,9 @@ function showPlaybackError(url){
         '<div style="font-weight:700;margin-bottom:8px">无法在此浏览器播放</div>'+
         '<div style="color:#9aa1ad;margin-bottom:16px">'+hint+'</div>'+
         '<textarea id="play-err-url" style="width:100%;height:80px;padding:8px;background:#0f1115;color:#e8eaed;border:1px solid #262a32;border-radius:6px;font-size:11px;font-family:monospace;resize:none" readonly>'+esc(linkUrl)+'</textarea>'+
-        '<div style="display:flex;gap:8px;margin-top:10px;justify-content:center">'+
+        '<div style="display:flex;gap:8px;margin-top:10px;justify-content:center;flex-wrap:wrap">'+
             btnPrimary+
+            switchBtn+
             '<a href="'+esc(linkUrl)+'" target="_blank" rel="noopener" style="padding:8px 18px;background:#1e2128;color:#e8eaed;border:1px solid #262a32;border-radius:6px;text-decoration:none;font-size:13px">浏览器打开</a>'+
         '</div></div>';
     var copy=document.getElementById('play-err-copy');
@@ -444,6 +463,13 @@ function showPlaybackError(url){
     };
     var back=document.getElementById('play-err-back');
     if(back)back.onclick=function(){closePlayer();};
+    var sw=document.getElementById('play-err-switch');
+    if(sw)sw.onclick=function(){
+        // 弹出线路切换面板
+        if(state.lastPlayResp&&state.playingDetail){
+            showSourceSwitch(state.lastPlayResp,state.playingDetail,state.playingEpIndex);
+        }
+    };
 }
 
 function closePlayer(){
@@ -783,6 +809,11 @@ async function playUrl(detail,ep,epIndex){
     hist.unshift({vid:detail.vod_id,src:detail.source,name:detail.vod_name,pic:detail.vod_pic,ep:epIndex,epName:ep.name,time:Date.now(),url:ep.url});
     saveHist(hist);
 
+    // 记录播放上下文，供失败时切线
+    state.playingDetail=detail;
+    state.playingEpIndex=epIndex;
+    state.playingEpName=ep.name||'';
+
     // try resolve via server to get playable url (share page → m3u8/mp4)
     var url=ep.url;
     var originalUrl='';
@@ -791,6 +822,7 @@ async function playUrl(detail,ep,epIndex){
     try{
         var r=await fetch('/api/tv/play?source='+encodeURIComponent(detail.source)+'&vod_id='+encodeURIComponent(detail.vod_id)+'&ep='+epIndex);
         var d=await r.json();
+        state.lastPlayResp=d;
         if(d.error_code==='PLAY_SOURCE_UNAVAILABLE'||(r.status===502&&d.groups)){
             // 后端解析失败：弹切换线路面板
             state.lastOriginalUrl=d.failed_url||url;
@@ -845,6 +877,7 @@ async function playUrlWithFrom(detail,from,epIndex){
     try{
         var r=await fetch('/api/tv/play?source='+encodeURIComponent(detail.source)+'&vod_id='+encodeURIComponent(detail.vod_id)+'&ep='+epIndex+'&from='+encodeURIComponent(from));
         var d=await r.json();
+        state.lastPlayResp=d;
         if(d.error_code==='PLAY_SOURCE_UNAVAILABLE'||(r.status===502&&d.groups)){
             showSourceSwitch(d,detail,epIndex);
             return;

@@ -6,6 +6,10 @@
  *
  * - m3u8 文本：解析后把所有分片/子 playlist URL 重写为代理 URL
  * - 其他资源（ts/mp4/m4s...）：直接 fetch 并转发二进制
+ *
+ * 关键防护：上游返回 4xx/5xx 或上游 content-type 是 text/html
+ * （资源站 404 HTML 特征）时，绝不进入 m3u8 重写逻辑，统一返回 502。
+ * 否则会把 "<!DOCTYPE html>..." 的每一行都包成代理 URL，污染 m3u8 文本。
  */
 const { json, absUrl } = require('./_shared');
 
@@ -27,13 +31,18 @@ function isM3u8(u) {
   return /\.m3u8(\?|$)/i.test(u);
 }
 
+function looksLikeHtml(text) {
+  if (!text) return false;
+  // 截前 512 字节判断（404 HTML 特征）
+  const head = text.slice(0, 512).trim().toLowerCase();
+  return head.startsWith('<!doctype') || head.startsWith('<html') || head.startsWith('<head') || head.startsWith('<body');
+}
+
 function rewriteM3u8Text(text, baseUrl) {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.charAt(0) === '#') continue;
-    // URI attributes in tags (key="value", value="uri")
-    // 仅重写 value 中的绝对路径 / 相对路径，不动带参数的签名串? 这里我们无脑全包到代理，安全
     let abs;
     try { abs = absUrl(t, baseUrl); } catch (e) { continue; }
     lines[i] = proxyUrl(abs);
@@ -79,8 +88,43 @@ exports.handler = async (event) => {
     const contentRange = resp.headers.get('content-range') || '';
     const acceptRanges = resp.headers.get('accept-ranges') || '';
 
+    // 1) 上游非 2xx：资源站失效，透传状态码 + 简短提示，绝不重写 m3u8
+    if (resp.status < 200 || resp.status >= 300) {
+      let snippet = '';
+      try {
+        const t = await resp.text();
+        snippet = (t || '').slice(0, 200);
+      } catch (e) { /* ignore */ }
+      return json(502, {
+        error: 'upstream returned ' + resp.status,
+        upstream_status: resp.status,
+        upstream_content_type: contentType,
+        snippet,
+      });
+    }
+
     if (isM3u8(url) || /mpegurl/i.test(contentType)) {
+      // 读全文用于校验 + 重写（m3u8 一般几 KB 到几十 KB，可接受）
       const text = await resp.text();
+      // 2) 上游虽然 200，但返回的是 HTML（资源站 404 页面），绝不重写
+      if (looksLikeHtml(text) || /text\/html/i.test(contentType)) {
+        return json(502, {
+          error: 'upstream returned HTML (likely 404 page), not m3u8',
+          upstream_status: 200,
+          upstream_content_type: contentType,
+          snippet: text.slice(0, 200),
+        });
+      }
+      // 3) 文本不是以 #EXTM3U 开头，也视为失效
+      const head = text.slice(0, 16).trim();
+      if (head.indexOf('#EXTM3U') !== 0) {
+        return json(502, {
+          error: 'upstream body is not a valid m3u8 playlist',
+          upstream_status: 200,
+          upstream_content_type: contentType,
+          snippet: text.slice(0, 200),
+        });
+      }
       const rewritten = rewriteM3u8Text(text, resp.url || url);
       return {
         statusCode: 200,
